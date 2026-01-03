@@ -1,13 +1,13 @@
 /**
- * PARSER DIRETTA.IT AVANZATO CON PUPPETEER
- * Estrae dati reali usando rendering JavaScript
+ * PARSER DIRETTA.IT AVANZATO CON PUPPETEER + ANTI-DETECTION
+ * Simula browser reale per evitare blocchi
  */
 
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 
 /**
- * Configurazione ottimizzata per Render.com
+ * Configurazione anti-detection ottimizzata
  */
 const PUPPETEER_CONFIG = {
   args: [
@@ -15,17 +15,91 @@ const PUPPETEER_CONFIG = {
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
+    '--disable-blink-features=AutomationControlled', // Nasconde automazione
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-web-security',
     '--disable-gpu',
     '--single-process',
-    '--no-zygote'
+    '--no-zygote',
+    '--lang=it-IT'
   ],
-  defaultViewport: chromium.defaultViewport,
-  executablePath: null, // Sarà impostato dinamicamente
-  headless: chromium.headless
+  defaultViewport: {
+    width: 1920,
+    height: 1080,
+    deviceScaleFactor: 1,
+    hasTouch: false,
+    isLandscape: true,
+    isMobile: false
+  },
+  executablePath: null,
+  headless: chromium.headless,
+  ignoreHTTPSErrors: true
 };
 
 /**
- * Inizializza browser Puppeteer
+ * Evasione rilevamento bot (stealth mode)
+ */
+async function setupStealthMode(page) {
+  // Rimuovi flag webdriver
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => false
+    });
+    
+    // Override permissions
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) => (
+      parameters.name === 'notifications' ?
+        Promise.resolve({ state: Notification.permission }) :
+        originalQuery(parameters)
+    );
+    
+    // Override plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [
+        {
+          0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
+          description: "Portable Document Format",
+          filename: "internal-pdf-viewer",
+          length: 1,
+          name: "Chrome PDF Plugin"
+        }
+      ]
+    });
+    
+    // Override languages
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['it-IT', 'it', 'en-US', 'en']
+    });
+    
+    // Chrome runtime
+    window.chrome = {
+      runtime: {}
+    };
+  });
+  
+  // Headers realistici
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Cache-Control': 'max-age=0'
+  });
+  
+  // User agent realistico
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  );
+}
+
+/**
+ * Inizializza browser con stealth
  */
 async function initBrowser() {
   PUPPETEER_CONFIG.executablePath = await chromium.executablePath();
@@ -33,115 +107,194 @@ async function initBrowser() {
 }
 
 /**
- * Scraper principale Diretta.it
+ * Attendi caricamento con retry multipli
+ */
+async function waitForMatchesWithRetry(page, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`  ⏳ Tentativo ${attempt}/${maxRetries}: attesa elementi...`);
+      
+      // Attendi sia il container che gli elementi
+      await Promise.race([
+        page.waitForSelector('[data-event-row="true"]', { timeout: 10000 }),
+        page.waitForSelector('.event__match', { timeout: 10000 }),
+        page.waitForSelector('[class*="event"][class*="match"]', { timeout: 10000 })
+      ]);
+      
+      console.log(`  ✅ Elementi trovati al tentativo ${attempt}`);
+      return true;
+      
+    } catch (err) {
+      console.log(`  ⚠️ Tentativo ${attempt} fallito: ${err.message}`);
+      
+      if (attempt < maxRetries) {
+        // Scroll per triggerare lazy loading
+        await page.evaluate(() => {
+          window.scrollBy(0, 500);
+        });
+        await page.waitForTimeout(2000);
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Scraper principale Diretta.it con anti-detection
  */
 async function scrapeDirettaLive(leagueFilter = null) {
   let browser;
   const startTime = Date.now();
   
   try {
-    console.log('🚀 [Diretta Puppeteer] Avvio scraper avanzato...');
+    console.log('🚀 [Diretta Stealth] Avvio scraper con anti-detection...');
     
     browser = await initBrowser();
     const page = await browser.newPage();
     
-    // Headers realistici
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
+    // Setup stealth mode
+    await setupStealthMode(page);
     
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-    });
+    // NON bloccare risorse per evitare sospetti
+    console.log('📡 [Diretta] Caricamento pagina (modalità stealth)...');
     
-    // Blocca risorse non necessarie per velocità
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const resourceType = req.resourceType();
-      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-    
-    console.log('📡 [Diretta] Caricamento pagina...');
     await page.goto('https://www.diretta.it/calcio/', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     });
     
-    // Attendi il caricamento dei match
-    await page.waitForSelector('[data-event-row="true"]', { timeout: 15000 });
+    // Attendi caricamento JS
+    await page.waitForTimeout(3000);
     
-    // Chiudi eventuali popup cookie
+    // Chiudi popup cookie se presente
     try {
       await page.evaluate(() => {
-        const cookieBtn = document.querySelector('[id*="cookie"], [class*="cookie"], [id*="consent"]');
-        if (cookieBtn) cookieBtn.click();
+        const selectors = [
+          '#onetrust-accept-btn-handler',
+          '[id*="cookie"][id*="accept"]',
+          '[class*="cookie"][class*="accept"]',
+          'button[id*="consent"]',
+          '.consent-accept'
+        ];
+        
+        for (const sel of selectors) {
+          const btn = document.querySelector(sel);
+          if (btn) {
+            btn.click();
+            break;
+          }
+        }
       });
-    } catch (e) {}
+      await page.waitForTimeout(1000);
+    } catch (e) {
+      console.log('  ℹ️ Nessun popup cookie da chiudere');
+    }
     
-    console.log('🔍 [Diretta] Estrazione dati...');
+    console.log('🔍 [Diretta] Ricerca elementi partite...');
     
-    // Estrai tutti i match
+    // Attendi elementi con retry
+    const found = await waitForMatchesWithRetry(page);
+    
+    if (!found) {
+      // Fallback: prova URL alternativo
+      console.log('⚠️ [Diretta] Nessun elemento trovato, provo URL alternativo...');
+      await page.goto('https://www.flashscore.it/calcio/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
+      await page.waitForTimeout(3000);
+    }
+    
+    console.log('📊 [Diretta] Estrazione dati...');
+    
+    // Estrai partite usando selettori multipli
     const matches = await page.evaluate((filter) => {
       const results = [];
       
-      // Trova tutte le partite
-      const matchElements = document.querySelectorAll('[data-event-row="true"]');
+      // Selettori multipli per compatibilità
+      const matchSelectors = [
+        '[data-event-row="true"]',
+        '.event__match',
+        '[class*="eventmatch"]'
+      ];
       
-      matchElements.forEach((matchEl) => {
+      let matchElements = [];
+      for (const selector of matchSelectors) {
+        matchElements = document.querySelectorAll(selector);
+        if (matchElements.length > 0) {
+          console.log(`Found ${matchElements.length} matches with selector: ${selector}`);
+          break;
+        }
+      }
+      
+      if (matchElements.length === 0) {
+        console.error('No match elements found with any selector');
+        return [];
+      }
+      
+      matchElements.forEach((matchEl, index) => {
         try {
-          // Squadre
-          const participants = matchEl.querySelectorAll('[data-testid="wcl-matchRow-participant"]');
-          if (participants.length < 2) return;
+          // Prova diversi metodi di estrazione
+          let homeTeam, awayTeam, homeScore, awayScore, status, minute, league;
           
-          const homeTeam = participants[0].querySelector('[data-testid="wcl-scores-simple-text-01"]')?.textContent?.trim();
-          const awayTeam = participants[1].querySelector('[data-testid="wcl-scores-simple-text-01"]')?.textContent?.trim();
+          // Metodo 1: data-testid (Diretta.it)
+          const participants = matchEl.querySelectorAll('[data-testid="wcl-matchRow-participant"]');
+          if (participants.length >= 2) {
+            homeTeam = participants[0].querySelector('[data-testid="wcl-scores-simple-text-01"]')?.textContent?.trim();
+            awayTeam = participants[1].querySelector('[data-testid="wcl-scores-simple-text-01"]')?.textContent?.trim();
+          }
+          
+          // Metodo 2: classi FlashScore
+          if (!homeTeam || !awayTeam) {
+            homeTeam = matchEl.querySelector('.event__participant--home')?.textContent?.trim();
+            awayTeam = matchEl.querySelector('.event__participant--away')?.textContent?.trim();
+          }
           
           if (!homeTeam || !awayTeam) return;
           
           // Punteggi
-          const scores = matchEl.querySelectorAll('[data-testid="wcl-matchRowScore"]');
-          let homeScore = scores[0]?.textContent?.trim();
-          let awayScore = scores[1]?.textContent?.trim();
+          const scoreEls = matchEl.querySelectorAll('[data-testid="wcl-matchRowScore"]');
+          if (scoreEls.length >= 2) {
+            homeScore = scoreEls[0]?.textContent?.trim();
+            awayScore = scoreEls[1]?.textContent?.trim();
+          } else {
+            homeScore = matchEl.querySelector('.event__score--home')?.textContent?.trim();
+            awayScore = matchEl.querySelector('.event__score--away')?.textContent?.trim();
+          }
           
-          // Converti '-' in null
           homeScore = (homeScore && homeScore !== '-') ? parseInt(homeScore) : null;
           awayScore = (awayScore && awayScore !== '-') ? parseInt(awayScore) : null;
           
           // Status
           const isLive = matchEl.classList.contains('eventmatch--live') || 
+                        matchEl.classList.contains('event__match--live') ||
                         matchEl.querySelector('[data-state="live"]') !== null;
           
-          const status = isLive ? 'LIVE' : 'SCHEDULED';
+          status = isLive ? 'LIVE' : 'SCHEDULED';
           
-          // Minuto o orario
-          let minute = null;
+          // Minuto
           if (isLive) {
-            // Cerca minuto
-            const stageEl = matchEl.querySelector('.eventstage--block');
+            const stageEl = matchEl.querySelector('.eventstage--block, .event__stage');
             if (stageEl) {
               const text = stageEl.textContent.trim();
               const minMatch = text.match(/(\d+)/);
               if (minMatch) minute = minMatch[1] + "'";
             }
           } else {
-            // Orario programmato
-            const timeEl = matchEl.querySelector('.eventtime');
+            const timeEl = matchEl.querySelector('.eventtime, .event__time');
             if (timeEl) minute = timeEl.textContent.trim();
           }
           
-          // Trova lega (risale nell'HTML)
-          let league = 'Unknown';
+          // Lega
           let prevElement = matchEl.previousElementSibling;
           let attempts = 0;
+          league = 'Unknown';
           
           while (prevElement && attempts < 20) {
-            if (prevElement.classList.contains('headerLeague')) {
-              const leagueEl = prevElement.querySelector('[data-testid="wcl-scores-simple-text-01"]');
+            if (prevElement.classList.contains('headerLeague') || 
+                prevElement.classList.contains('event__header')) {
+              const leagueEl = prevElement.querySelector('[data-testid="wcl-scores-simple-text-01"], .event__title--name');
               if (leagueEl) {
                 league = leagueEl.textContent.trim();
                 break;
@@ -151,17 +304,20 @@ async function scrapeDirettaLive(leagueFilter = null) {
             attempts++;
           }
           
-          // Filtra per lega se richiesto
+          // Filtra per lega
           if (filter && !league.toLowerCase().includes(filter.toLowerCase())) {
             return;
           }
           
-          // URL partita
-          const linkEl = matchEl.querySelector('a.eventRowLink');
-          const matchUrl = linkEl ? `https://www.diretta.it${linkEl.getAttribute('href')}` : null;
+          // URL
+          const linkEl = matchEl.querySelector('a.eventRowLink, a[href*="partita"]');
+          let matchUrl = null;
+          if (linkEl) {
+            const href = linkEl.getAttribute('href');
+            matchUrl = href.startsWith('http') ? href : `https://www.diretta.it${href}`;
+          }
           
-          // ID dalla URL
-          const matchId = matchUrl ? matchUrl.split('?mid=')[1] : null;
+          const matchId = matchUrl ? matchUrl.split('?mid=')[1] || `match_${index}` : `match_${index}`;
           
           results.push({
             id: matchId,
@@ -176,7 +332,7 @@ async function scrapeDirettaLive(leagueFilter = null) {
           });
           
         } catch (err) {
-          console.error('Errore parsing match:', err.message);
+          console.error(`Error parsing match ${index}:`, err.message);
         }
       });
       
