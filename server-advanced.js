@@ -1,6 +1,6 @@
 // ===================================
-// SCRAPER AVANZATO CON EVENTI + DIRETTA.IT PUPPETEER
-// server-advanced.js v2.1.0
+// SCRAPER AVANZATO + DIRETTA.IT API
+// server-advanced.js v2.2.0 - Lightweight
 // ===================================
 
 const express = require('express');
@@ -8,15 +8,14 @@ const cors = require('cors');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const NodeCache = require('node-cache');
-const { scrapeDirettaLive, scrapeDirettaLiveOnly, scrapeDirettaLeague } = require('./parser-diretta-puppeteer');
+const { scrapeDirettaLive, scrapeDirettaLiveOnly, scrapeDirettaLeague } = require('./parser-diretta-api');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Cache: 30 secondi per live scores (aggiornamento rapido)
+// Cache: 30 secondi per FlashScore, 60 secondi per Diretta API
 const cache = new NodeCache({ stdTTL: 30 });
 
-// Cache Diretta.it: 1 minuto (dati reali)
 let direttaCachedData = null;
 let direttaLastFetch = null;
 const DIRETTA_CACHE_DURATION = 60000; // 1 minuto
@@ -25,13 +24,13 @@ app.use(cors());
 app.use(express.json());
 
 // ===================================
-// SCRAPER AVANZATO FLASHSCORE
+// SCRAPER FLASHSCORE (PUPPETEER)
 // ===================================
 
 async function scrapeFlashScoreAdvanced() {
   let browser;
   try {
-    console.log('🔍 Avvio scraping avanzato FlashScore...');
+    console.log('🔍 Avvio scraping FlashScore...');
     
     browser = await puppeteer.launch({
       args: chromium.args,
@@ -50,7 +49,6 @@ async function scrapeFlashScoreAdvanced() {
     
     await page.waitForSelector('.sportName.soccer', { timeout: 10000 });
     
-    // Estrai partite con eventi
     const liveMatches = await page.evaluate(() => {
       const matches = [];
       const matchElements = document.querySelectorAll('.event__match--live');
@@ -64,37 +62,6 @@ async function scrapeFlashScoreAdvanced() {
           const time = match.querySelector('.event__time')?.textContent.trim() || '';
           const stage = match.querySelector('.event__stage--block')?.textContent.trim() || '';
           
-          // Estrai eventi (gol, cartellini) se visibili
-          const events = [];
-          const incidentsContainer = match.querySelector('.event__incidents');
-          
-          if (incidentsContainer) {
-            const incidents = incidentsContainer.querySelectorAll('.incident');
-            incidents.forEach(incident => {
-              const incidentTime = incident.querySelector('.incident__time')?.textContent.trim();
-              const incidentPlayer = incident.querySelector('.incident__participant')?.textContent.trim();
-              const incidentIcon = incident.querySelector('.incident__icon');
-              
-              let type = 'unknown';
-              if (incidentIcon) {
-                if (incidentIcon.classList.contains('soccer-ball')) type = 'goal';
-                else if (incidentIcon.classList.contains('y-card')) type = 'yellowcard';
-                else if (incidentIcon.classList.contains('r-card')) type = 'redcard';
-                else if (incidentIcon.classList.contains('substitution')) type = 'substitution';
-              }
-              
-              if (incidentTime && incidentPlayer) {
-                events.push({
-                  minute: parseInt(incidentTime.replace("'", '')),
-                  type,
-                  player: incidentPlayer,
-                  team: incident.classList.contains('incident--home') ? 'home' : 'away'
-                });
-              }
-            });
-          }
-          
-          // Cerca competizione
           let competition = 'N/A';
           let currentElement = match.closest('.sportName')?.previousElementSibling;
           while (currentElement && !competition.includes('Serie')) {
@@ -116,7 +83,7 @@ async function scrapeFlashScoreAdvanced() {
               time: stage || time,
               status: stage === 'Intervallo' ? 'HALFTIME' : 'IN_PLAY',
               competition,
-              events: events.sort((a, b) => b.minute - a.minute)
+              events: []
             });
           }
         } catch (err) {
@@ -127,8 +94,7 @@ async function scrapeFlashScoreAdvanced() {
       return matches;
     });
     
-    console.log(`✅ Estratte ${liveMatches.length} partite FlashScore`);
-    
+    console.log(`✅ FlashScore: ${liveMatches.length} partite`);
     await browser.close();
     return liveMatches;
     
@@ -138,10 +104,6 @@ async function scrapeFlashScoreAdvanced() {
     throw error;
   }
 }
-
-// ===================================
-// SCRAPER SPECIFICO SERIE A
-// ===================================
 
 async function scrapeSerieAOnly() {
   let browser;
@@ -194,7 +156,7 @@ async function scrapeSerieAOnly() {
       return results;
     });
     
-    console.log(`✅ Serie A: ${matches.length} partite live`);
+    console.log(`✅ Serie A: ${matches.length} partite`);
     await browser.close();
     return matches;
     
@@ -209,40 +171,30 @@ async function scrapeSerieAOnly() {
 // API ENDPOINTS
 // ===================================
 
-// Homepage
 app.get('/', (req, res) => {
   const baseUrl = req.protocol + '://' + req.get('host');
   res.json({
     name: 'Pronostici Backend API',
-    version: '2.1.0',
+    version: '2.2.0',
     status: 'online',
     features: [
-      'FlashScore scraping with Puppeteer',
-      'Diretta.it advanced scraping with real data',
+      'FlashScore scraping with Puppeteer (heavy)',
+      'Diretta.it API parser (lightweight, FAST)',
       'Smart caching (30s FlashScore, 60s Diretta)',
-      'League filtering',
-      'Status filtering'
+      'No browser needed for Diretta endpoints',
+      'Real data from mobile API'
     ],
     endpoints: {
       health: `${baseUrl}/api/health`,
       stats: `${baseUrl}/api/stats`,
-      liveScores: `${baseUrl}/api/live-scores`,
-      serieA: `${baseUrl}/api/live-scores/serie-a`,
-      league: `${baseUrl}/api/live-scores/league/:league`,
-      direttaLive: `${baseUrl}/api/diretta/live`,
-      direttaLeague: `${baseUrl}/api/diretta/league/:name`,
-      direttaStatus: `${baseUrl}/api/diretta/status/:status`
+      liveScores: `${baseUrl}/api/live-scores (Puppeteer - slow)`,
+      serieA: `${baseUrl}/api/live-scores/serie-a (Puppeteer - slow)`,
+      league: `${baseUrl}/api/live-scores/league/:league (Puppeteer - slow)`,
+      direttaLive: `${baseUrl}/api/diretta/live (API - FAST ⚡)`,
+      direttaLeague: `${baseUrl}/api/diretta/league/:name (API - FAST ⚡)`,
+      direttaStatus: `${baseUrl}/api/diretta/status/:status (API - FAST ⚡)`
     },
-    documentation: {
-      health: 'Server health check',
-      stats: 'Cache statistics',
-      liveScores: 'All live matches from FlashScore (Puppeteer)',
-      serieA: 'Live Serie A matches only (Puppeteer)',
-      league: 'Filter FlashScore by league name',
-      direttaLive: 'REAL DATA from Diretta.it (Puppeteer scraping)',
-      direttaLeague: 'Filter Diretta.it by league name (REAL DATA)',
-      direttaStatus: 'Filter Diretta.it by status: live or scheduled (REAL DATA)'
-    }
+    recommendation: 'Use /api/diretta/* endpoints for better performance (no Puppeteer)'
   });
 });
 
@@ -305,18 +257,18 @@ app.get('/api/live-scores/league/:league', async (req, res) => {
 });
 
 // ===================================
-// DIRETTA.IT ENDPOINTS (PUPPETEER AVANZATO)
+// DIRETTA.IT API ENDPOINTS (LIGHTWEIGHT)
 // ===================================
 
 /**
  * GET /api/diretta/live
- * DATI REALI da Diretta.it con Puppeteer
+ * FAST: usa API mobile FlashScore (no Puppeteer)
  */
 app.get('/api/diretta/live', async (req, res) => {
   try {
     const now = Date.now();
     
-    // Usa cache se valida
+    // Cache check
     if (direttaCachedData && direttaLastFetch && (now - direttaLastFetch) < DIRETTA_CACHE_DURATION) {
       return res.json({
         timestamp: new Date().toISOString(),
@@ -324,15 +276,15 @@ app.get('/api/diretta/live', async (req, res) => {
         matches: direttaCachedData,
         cached: true,
         cacheAge: Math.floor((now - direttaLastFetch) / 1000),
-        source: 'Diretta.it (Puppeteer)'
+        source: 'FlashScore Mobile API'
       });
     }
 
-    // Scraping REALE
-    console.log('🌐 [API] Fetching REAL data from Diretta.it...');
+    // Fetch from API
+    console.log('⚡ [API] Fetching from FlashScore API...');
     const matches = await scrapeDirettaLive();
     
-    // Aggiorna cache
+    // Update cache
     direttaCachedData = matches;
     direttaLastFetch = now;
 
@@ -341,12 +293,12 @@ app.get('/api/diretta/live', async (req, res) => {
       total: matches.length,
       matches: matches,
       cached: false,
-      source: 'Diretta.it (Puppeteer)'
+      source: 'FlashScore Mobile API'
     });
   } catch (error) {
-    console.error('❌ Error fetching Diretta.it:', error.message);
+    console.error('❌ Error:', error.message);
     res.status(500).json({
-      error: 'Failed to fetch live matches',
+      error: 'Failed to fetch matches',
       message: error.message
     });
   }
@@ -354,7 +306,7 @@ app.get('/api/diretta/live', async (req, res) => {
 
 /**
  * GET /api/diretta/league/:name
- * Filtra DATI REALI per campionato
+ * FAST: filtra per lega
  */
 app.get('/api/diretta/league/:name', async (req, res) => {
   try {
@@ -368,7 +320,7 @@ app.get('/api/diretta/league/:name', async (req, res) => {
       league: name,
       total: matches.length,
       matches: matches,
-      source: 'Diretta.it (Puppeteer)'
+      source: 'FlashScore Mobile API'
     });
   } catch (error) {
     console.error('❌ Error:', error.message);
@@ -378,7 +330,7 @@ app.get('/api/diretta/league/:name', async (req, res) => {
 
 /**
  * GET /api/diretta/status/:status
- * Filtra DATI REALI per status (live o scheduled)
+ * FAST: filtra per status
  */
 app.get('/api/diretta/status/:status', async (req, res) => {
   try {
@@ -400,7 +352,7 @@ app.get('/api/diretta/status/:status', async (req, res) => {
       status,
       total: matches.length,
       matches: matches,
-      source: 'Diretta.it (Puppeteer)'
+      source: 'FlashScore Mobile API'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -416,44 +368,46 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
-    version: '2.1.0'
+    version: '2.2.0'
   });
 });
 
 app.get('/api/stats', (req, res) => {
   const keys = cache.keys();
   res.json({
-    version: '2.1.0',
+    version: '2.2.0',
     cached_endpoints: keys.length,
     keys: keys,
     uptime: process.uptime(),
-    flashscore_cache: {
-      ttl_seconds: 30
+    flashscore_puppeteer: {
+      ttl_seconds: 30,
+      note: 'Slow, uses browser'
     },
-    diretta_cache: {
+    diretta_api: {
       active: !!direttaCachedData,
       age_seconds: direttaLastFetch ? Math.floor((Date.now() - direttaLastFetch) / 1000) : null,
       matches_count: direttaCachedData?.length || 0,
-      ttl_seconds: 60
+      ttl_seconds: 60,
+      note: 'FAST, no browser needed'
     }
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Pronostici Backend v2.1.0 - REAL DATA SCRAPER`);
-  console.log(`📡 Server running on http://localhost:${PORT}`);
-  console.log(`\n📊 Available Endpoints:`);
-  console.log(`\n   FLASHSCORE (Puppeteer):`);
-  console.log(`   ├─ GET /api/live-scores (all matches)`);
-  console.log(`   ├─ GET /api/live-scores/serie-a (Serie A only)`);
-  console.log(`   └─ GET /api/live-scores/league/:league (filter)`);
-  console.log(`\n   DIRETTA.IT (Puppeteer REAL DATA):`);
-  console.log(`   ├─ GET /api/diretta/live (all matches - REAL)`);
-  console.log(`   ├─ GET /api/diretta/league/:name (filter by league - REAL)`);
-  console.log(`   └─ GET /api/diretta/status/:status (live/scheduled - REAL)`);
+  console.log(`\n⚡ Pronostici Backend v2.2.0 - LIGHTWEIGHT`);
+  console.log(`📡 Server: http://localhost:${PORT}`);
+  console.log(`\n📊 Endpoints:`);
+  console.log(`\n   FLASHSCORE (Puppeteer - SLOW):`);
+  console.log(`   ├─ GET /api/live-scores`);
+  console.log(`   ├─ GET /api/live-scores/serie-a`);
+  console.log(`   └─ GET /api/live-scores/league/:league`);
+  console.log(`\n   DIRETTA API (No browser - FAST ⚡):`);
+  console.log(`   ├─ GET /api/diretta/live`);
+  console.log(`   ├─ GET /api/diretta/league/:name`);
+  console.log(`   └─ GET /api/diretta/status/:status`);
   console.log(`\n   UTILITY:`);
-  console.log(`   ├─ GET /api/health (health check)`);
-  console.log(`   ├─ GET /api/stats (cache stats)`);
-  console.log(`   └─ GET / (API documentation)\n`);
-  console.log(`✨ Nota: Diretta.it ora usa scraping Puppeteer per dati REALI!\n`);
+  console.log(`   ├─ GET /api/health`);
+  console.log(`   ├─ GET /api/stats`);
+  console.log(`   └─ GET /`);
+  console.log(`\n✨ Recommendation: Use /api/diretta/* for best performance!\n`);
 });
