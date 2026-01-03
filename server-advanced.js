@@ -5,11 +5,12 @@
 
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 const NodeCache = require('node-cache');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Cache: 30 secondi per live scores (aggiornamento rapido)
 const cache = new NodeCache({ stdTTL: 30 });
@@ -27,8 +28,10 @@ async function scrapeFlashScoreAdvanced() {
     console.log('🔍 Avvio scraping avanzato FlashScore...');
     
     browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
     });
     
     const page = await browser.newPage();
@@ -139,7 +142,13 @@ async function scrapeSerieAOnly() {
   try {
     console.log('🇮🇹 Scraping Serie A...');
     
-    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
+    
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
     
