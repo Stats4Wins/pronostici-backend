@@ -6,8 +6,3 @@ services:
     plan: free
     buildCommand: npm install --production
     startCommand: node server-advanced.js
-    envVars:
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: false
-      - key: PUPPETEER_EXECUTABLE_PATH
-        value: /usr/bin/chromium-browser
