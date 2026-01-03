@@ -204,6 +204,30 @@ async function scrapeSerieAOnly() {
 // API ENDPOINTS
 // ===================================
 
+// Homepage
+app.get('/', (req, res) => {
+  const baseUrl = req.protocol + '://' + req.get('host');
+  res.json({
+    name: 'Pronostici Backend API',
+    version: '1.0.0',
+    status: 'online',
+    endpoints: {
+      health: `${baseUrl}/api/health`,
+      stats: `${baseUrl}/api/stats`,
+      liveScores: `${baseUrl}/api/live-scores`,
+      serieA: `${baseUrl}/api/live-scores/serie-a`,
+      league: `${baseUrl}/api/live-scores/league/:league`
+    },
+    documentation: {
+      health: 'Server health check',
+      stats: 'Cache statistics',
+      liveScores: 'All live matches from FlashScore',
+      serieA: 'Live Serie A matches only',
+      league: 'Filter by league name (e.g., /api/live-scores/league/premier)'
+    }
+  });
+});
+
 // Tutte le partite live
 app.get('/api/live-scores', async (req, res) => {
   try {
@@ -279,6 +303,7 @@ app.get('/api/stats', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server avanzato su http://localhost:${PORT}`);
   console.log(`📊 Endpoints disponibili:`);
+  console.log(`   - GET / (homepage API info)`);
   console.log(`   - GET /api/live-scores (tutte le partite)`);
   console.log(`   - GET /api/live-scores/serie-a (solo Serie A)`);
   console.log(`   - GET /api/live-scores/league/:league (filtra per campionato)`);
