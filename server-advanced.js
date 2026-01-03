@@ -1,6 +1,6 @@
 // ===================================
-// SCRAPER AVANZATO CON EVENTI + DIRETTA.IT
-// server-advanced.js
+// SCRAPER AVANZATO CON EVENTI + DIRETTA.IT PUPPETEER
+// server-advanced.js v2.1.0
 // ===================================
 
 const express = require('express');
@@ -8,7 +8,7 @@ const cors = require('cors');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const NodeCache = require('node-cache');
-const { parseDirettaLiveMatches, parseDirettaLive, parseDirettaLeague } = require('./parser-diretta');
+const { scrapeDirettaLive, scrapeDirettaLiveOnly, scrapeDirettaLeague } = require('./parser-diretta-puppeteer');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 3001;
 // Cache: 30 secondi per live scores (aggiornamento rapido)
 const cache = new NodeCache({ stdTTL: 30 });
 
-// Cache Diretta.it: 1 minuto
+// Cache Diretta.it: 1 minuto (dati reali)
 let direttaCachedData = null;
 let direttaLastFetch = null;
 const DIRETTA_CACHE_DURATION = 60000; // 1 minuto
@@ -25,7 +25,7 @@ app.use(cors());
 app.use(express.json());
 
 // ===================================
-// SCRAPER AVANZATO CON EVENTI
+// SCRAPER AVANZATO FLASHSCORE
 // ===================================
 
 async function scrapeFlashScoreAdvanced() {
@@ -116,7 +116,7 @@ async function scrapeFlashScoreAdvanced() {
               time: stage || time,
               status: stage === 'Intervallo' ? 'HALFTIME' : 'IN_PLAY',
               competition,
-              events: events.sort((a, b) => b.minute - a.minute) // Ordina per minuto desc
+              events: events.sort((a, b) => b.minute - a.minute)
             });
           }
         } catch (err) {
@@ -127,13 +127,13 @@ async function scrapeFlashScoreAdvanced() {
       return matches;
     });
     
-    console.log(`✅ Estratte ${liveMatches.length} partite con ${liveMatches.reduce((sum, m) => sum + m.events.length, 0)} eventi totali`);
+    console.log(`✅ Estratte ${liveMatches.length} partite FlashScore`);
     
     await browser.close();
     return liveMatches;
     
   } catch (error) {
-    console.error('❌ Errore:', error);
+    console.error('❌ Errore FlashScore:', error);
     if (browser) await browser.close();
     throw error;
   }
@@ -158,13 +158,12 @@ async function scrapeSerieAOnly() {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
     
-    // URL specifico per Serie A
     await page.goto('https://www.flashscore.it/calcio/italia/serie-a/', {
       waitUntil: 'networkidle2',
       timeout: 30000
     });
     
-    await page.waitForTimeout(2000); // Attendi caricamento
+    await page.waitForTimeout(2000);
     
     const matches = await page.evaluate(() => {
       const results = [];
@@ -215,8 +214,15 @@ app.get('/', (req, res) => {
   const baseUrl = req.protocol + '://' + req.get('host');
   res.json({
     name: 'Pronostici Backend API',
-    version: '2.0.1',
+    version: '2.1.0',
     status: 'online',
+    features: [
+      'FlashScore scraping with Puppeteer',
+      'Diretta.it advanced scraping with real data',
+      'Smart caching (30s FlashScore, 60s Diretta)',
+      'League filtering',
+      'Status filtering'
+    ],
     endpoints: {
       health: `${baseUrl}/api/health`,
       stats: `${baseUrl}/api/stats`,
@@ -233,9 +239,9 @@ app.get('/', (req, res) => {
       liveScores: 'All live matches from FlashScore (Puppeteer)',
       serieA: 'Live Serie A matches only (Puppeteer)',
       league: 'Filter FlashScore by league name',
-      direttaLive: 'All matches from Diretta.it (v4 parser with mock fallback)',
-      direttaLeague: 'Filter Diretta.it by league name',
-      direttaStatus: 'Filter Diretta.it by status (live/scheduled)'
+      direttaLive: 'REAL DATA from Diretta.it (Puppeteer scraping)',
+      direttaLeague: 'Filter Diretta.it by league name (REAL DATA)',
+      direttaStatus: 'Filter Diretta.it by status: live or scheduled (REAL DATA)'
     }
   });
 });
@@ -244,7 +250,6 @@ app.get('/', (req, res) => {
 // FLASHSCORE ENDPOINTS (PUPPETEER)
 // ===================================
 
-// Tutte le partite live
 app.get('/api/live-scores', async (req, res) => {
   try {
     const cached = cache.get('all-live');
@@ -261,7 +266,6 @@ app.get('/api/live-scores', async (req, res) => {
   }
 });
 
-// Solo Serie A
 app.get('/api/live-scores/serie-a', async (req, res) => {
   try {
     const cached = cache.get('serie-a-live');
@@ -278,7 +282,6 @@ app.get('/api/live-scores/serie-a', async (req, res) => {
   }
 });
 
-// Filtra per campionato
 app.get('/api/live-scores/league/:league', async (req, res) => {
   try {
     const { league } = req.params;
@@ -302,12 +305,12 @@ app.get('/api/live-scores/league/:league', async (req, res) => {
 });
 
 // ===================================
-// DIRETTA.IT ENDPOINTS (NUOVO PARSER V4)
+// DIRETTA.IT ENDPOINTS (PUPPETEER AVANZATO)
 // ===================================
 
 /**
  * GET /api/diretta/live
- * Tutte le partite da Diretta.it (con fallback mock)
+ * DATI REALI da Diretta.it con Puppeteer
  */
 app.get('/api/diretta/live', async (req, res) => {
   try {
@@ -320,13 +323,14 @@ app.get('/api/diretta/live', async (req, res) => {
         total: direttaCachedData.length,
         matches: direttaCachedData,
         cached: true,
-        cacheAge: Math.floor((now - direttaLastFetch) / 1000)
+        cacheAge: Math.floor((now - direttaLastFetch) / 1000),
+        source: 'Diretta.it (Puppeteer)'
       });
     }
 
-    // Fetch nuovi dati (ritorna sempre qualcosa)
-    console.log('📥 Fetching from Diretta.it...');
-    const matches = await parseDirettaLiveMatches();
+    // Scraping REALE
+    console.log('🌐 [API] Fetching REAL data from Diretta.it...');
+    const matches = await scrapeDirettaLive();
     
     // Aggiorna cache
     direttaCachedData = matches;
@@ -336,7 +340,8 @@ app.get('/api/diretta/live', async (req, res) => {
       timestamp: new Date().toISOString(),
       total: matches.length,
       matches: matches,
-      cached: false
+      cached: false,
+      source: 'Diretta.it (Puppeteer)'
     });
   } catch (error) {
     console.error('❌ Error fetching Diretta.it:', error.message);
@@ -349,18 +354,21 @@ app.get('/api/diretta/live', async (req, res) => {
 
 /**
  * GET /api/diretta/league/:name
- * Filtra partite Diretta.it per campionato
+ * Filtra DATI REALI per campionato
  */
 app.get('/api/diretta/league/:name', async (req, res) => {
   try {
     const { name } = req.params;
-    const matches = await parseDirettaLeague(name);
+    console.log(`🎯 [API] Fetching league: ${name}`);
+    
+    const matches = await scrapeDirettaLeague(name);
     
     res.json({
       timestamp: new Date().toISOString(),
       league: name,
       total: matches.length,
-      matches: matches
+      matches: matches,
+      source: 'Diretta.it (Puppeteer)'
     });
   } catch (error) {
     console.error('❌ Error:', error.message);
@@ -370,7 +378,7 @@ app.get('/api/diretta/league/:name', async (req, res) => {
 
 /**
  * GET /api/diretta/status/:status
- * Filtra per status (live o scheduled)
+ * Filtra DATI REALI per status (live o scheduled)
  */
 app.get('/api/diretta/status/:status', async (req, res) => {
   try {
@@ -378,9 +386,10 @@ app.get('/api/diretta/status/:status', async (req, res) => {
     
     let matches;
     if (status.toLowerCase() === 'live') {
-      matches = await parseDirettaLive();
+      console.log('🔴 [API] Fetching LIVE matches only...');
+      matches = await scrapeDirettaLiveOnly();
     } else {
-      const allMatches = await parseDirettaLiveMatches();
+      const allMatches = await scrapeDirettaLive();
       matches = allMatches.filter(m => 
         m.status.toLowerCase() === status.toLowerCase()
       );
@@ -390,7 +399,8 @@ app.get('/api/diretta/status/:status', async (req, res) => {
       timestamp: new Date().toISOString(),
       status,
       total: matches.length,
-      matches: matches
+      matches: matches,
+      source: 'Diretta.it (Puppeteer)'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -401,44 +411,49 @@ app.get('/api/diretta/status/:status', async (req, res) => {
 // UTILITY ENDPOINTS
 // ===================================
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     uptime: process.uptime(),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    version: '2.1.0'
   });
 });
 
-// Stats
 app.get('/api/stats', (req, res) => {
   const keys = cache.keys();
   res.json({
+    version: '2.1.0',
     cached_endpoints: keys.length,
     keys: keys,
     uptime: process.uptime(),
+    flashscore_cache: {
+      ttl_seconds: 30
+    },
     diretta_cache: {
       active: !!direttaCachedData,
       age_seconds: direttaLastFetch ? Math.floor((Date.now() - direttaLastFetch) / 1000) : null,
-      matches_count: direttaCachedData?.length || 0
+      matches_count: direttaCachedData?.length || 0,
+      ttl_seconds: 60
     }
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Pronostici Backend v2.0.1`);
+  console.log(`\n🚀 Pronostici Backend v2.1.0 - REAL DATA SCRAPER`);
   console.log(`📡 Server running on http://localhost:${PORT}`);
   console.log(`\n📊 Available Endpoints:`);
   console.log(`\n   FLASHSCORE (Puppeteer):`);
   console.log(`   ├─ GET /api/live-scores (all matches)`);
   console.log(`   ├─ GET /api/live-scores/serie-a (Serie A only)`);
   console.log(`   └─ GET /api/live-scores/league/:league (filter)`);
-  console.log(`\n   DIRETTA.IT (Parser v4 + Mock Fallback):`);
-  console.log(`   ├─ GET /api/diretta/live (all matches)`);
-  console.log(`   ├─ GET /api/diretta/league/:name (filter by league)`);
-  console.log(`   └─ GET /api/diretta/status/:status (live/scheduled)`);
+  console.log(`\n   DIRETTA.IT (Puppeteer REAL DATA):`);
+  console.log(`   ├─ GET /api/diretta/live (all matches - REAL)`);
+  console.log(`   ├─ GET /api/diretta/league/:name (filter by league - REAL)`);
+  console.log(`   └─ GET /api/diretta/status/:status (live/scheduled - REAL)`);
   console.log(`\n   UTILITY:`);
   console.log(`   ├─ GET /api/health (health check)`);
   console.log(`   ├─ GET /api/stats (cache stats)`);
   console.log(`   └─ GET / (API documentation)\n`);
+  console.log(`✨ Nota: Diretta.it ora usa scraping Puppeteer per dati REALI!\n`);
 });
