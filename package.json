@@ -11,5 +11,8 @@
     "cors": "^2.8.5",
     "puppeteer": "^21.6.1",
     "node-cache": "^5.1.2"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
