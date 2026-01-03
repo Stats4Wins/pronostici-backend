@@ -1,7 +1,7 @@
 {
   "name": "pronostici-scraper-backend",
   "version": "1.0.0",
-  "description": "Backend scraper per live scores FlashScore",
+  "description": "Backend scraper per live scores FlashScore e Diretta.it",
   "main": "server-advanced.js",
   "scripts": {
     "start": "node server-advanced.js"
@@ -11,7 +11,9 @@
     "cors": "^2.8.5",
     "puppeteer-core": "^21.6.1",
     "@sparticuz/chromium": "^119.0.2",
-    "node-cache": "^5.1.2"
+    "node-cache": "^5.1.2",
+    "cheerio": "^1.0.0-rc.12",
+    "axios": "^1.6.0"
   },
   "engines": {
     "node": "20.x"

@@ -1,5 +1,5 @@
 // ===================================
-// SCRAPER AVANZATO CON EVENTI
+// SCRAPER AVANZATO CON EVENTI + DIRETTA.IT
 // server-advanced.js
 // ===================================
 
@@ -8,6 +8,8 @@ const cors = require('cors');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const NodeCache = require('node-cache');
+const axios = require('axios');
+const DirettaParser = require('./DirettaParser');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -15,8 +17,29 @@ const PORT = process.env.PORT || 3001;
 // Cache: 30 secondi per live scores (aggiornamento rapido)
 const cache = new NodeCache({ stdTTL: 30 });
 
+// Cache Diretta.it: 1 minuto
+let direttaCachedData = null;
+let direttaLastFetch = null;
+const DIRETTA_CACHE_DURATION = 60000; // 1 minuto
+
 app.use(cors());
 app.use(express.json());
+
+// ===================================
+// DIRETTA.IT HELPERS
+// ===================================
+
+async function fetchDirettaHTML() {
+  const response = await axios.get('https://www.diretta.it/calcio/', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'text/html,application/xhtml+xml',
+      'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8'
+    },
+    timeout: 15000
+  });
+  return response.data;
+}
 
 // ===================================
 // SCRAPER AVANZATO CON EVENTI
@@ -209,24 +232,34 @@ app.get('/', (req, res) => {
   const baseUrl = req.protocol + '://' + req.get('host');
   res.json({
     name: 'Pronostici Backend API',
-    version: '1.0.0',
+    version: '2.0.0',
     status: 'online',
     endpoints: {
       health: `${baseUrl}/api/health`,
       stats: `${baseUrl}/api/stats`,
       liveScores: `${baseUrl}/api/live-scores`,
       serieA: `${baseUrl}/api/live-scores/serie-a`,
-      league: `${baseUrl}/api/live-scores/league/:league`
+      league: `${baseUrl}/api/live-scores/league/:league`,
+      direttaLive: `${baseUrl}/api/diretta/live`,
+      direttaLeague: `${baseUrl}/api/diretta/league/:name`,
+      direttaStatus: `${baseUrl}/api/diretta/status/:status`
     },
     documentation: {
       health: 'Server health check',
       stats: 'Cache statistics',
-      liveScores: 'All live matches from FlashScore',
-      serieA: 'Live Serie A matches only',
-      league: 'Filter by league name (e.g., /api/live-scores/league/premier)'
+      liveScores: 'All live matches from FlashScore (Puppeteer)',
+      serieA: 'Live Serie A matches only (Puppeteer)',
+      league: 'Filter FlashScore by league name',
+      direttaLive: 'All matches from Diretta.it (HTML parsing)',
+      direttaLeague: 'Filter Diretta.it by league name',
+      direttaStatus: 'Filter Diretta.it by status (live/finished/scheduled)'
     }
   });
 });
+
+// ===================================
+// FLASHSCORE ENDPOINTS (PUPPETEER)
+// ===================================
 
 // Tutte le partite live
 app.get('/api/live-scores', async (req, res) => {
@@ -285,9 +318,113 @@ app.get('/api/live-scores/league/:league', async (req, res) => {
   }
 });
 
+// ===================================
+// DIRETTA.IT ENDPOINTS (HTML PARSING)
+// ===================================
+
+/**
+ * GET /api/diretta/live
+ * Tutte le partite da Diretta.it (live, scheduled, finished)
+ */
+app.get('/api/diretta/live', async (req, res) => {
+  try {
+    const now = Date.now();
+    
+    // Usa cache se valida
+    if (direttaCachedData && direttaLastFetch && (now - direttaLastFetch) < DIRETTA_CACHE_DURATION) {
+      return res.json({
+        ...direttaCachedData,
+        cached: true,
+        cacheAge: Math.floor((now - direttaLastFetch) / 1000)
+      });
+    }
+
+    // Scarica e parsa
+    console.log('📥 Fetching from Diretta.it...');
+    const html = await fetchDirettaHTML();
+    const data = DirettaParser.parseMatches(html);
+    
+    // Aggiorna cache
+    direttaCachedData = data;
+    direttaLastFetch = now;
+
+    res.json({
+      ...data,
+      cached: false
+    });
+  } catch (error) {
+    console.error('❌ Error fetching Diretta.it:', error.message);
+    res.status(500).json({
+      error: 'Failed to fetch live matches',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/diretta/league/:name
+ * Filtra partite Diretta.it per campionato
+ */
+app.get('/api/diretta/league/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    
+    if (!direttaCachedData) {
+      const html = await fetchDirettaHTML();
+      direttaCachedData = DirettaParser.parseMatches(html);
+      direttaLastFetch = Date.now();
+    }
+
+    const filtered = DirettaParser.filterByLeague(direttaCachedData.matches, name);
+    
+    res.json({
+      league: name,
+      total: filtered.length,
+      matches: filtered
+    });
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/diretta/status/:status
+ * Filtra per status (live, finished, scheduled)
+ */
+app.get('/api/diretta/status/:status', async (req, res) => {
+  try {
+    const { status } = req.params;
+    
+    if (!direttaCachedData) {
+      const html = await fetchDirettaHTML();
+      direttaCachedData = DirettaParser.parseMatches(html);
+      direttaLastFetch = Date.now();
+    }
+
+    const filtered = DirettaParser.filterByStatus(direttaCachedData.matches, status);
+    
+    res.json({
+      status,
+      total: filtered.length,
+      matches: filtered
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===================================
+// UTILITY ENDPOINTS
+// ===================================
+
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
+  res.json({ 
+    status: 'ok', 
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Stats
@@ -296,17 +433,29 @@ app.get('/api/stats', (req, res) => {
   res.json({
     cached_endpoints: keys.length,
     keys: keys,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    diretta_cache: {
+      active: !!direttaCachedData,
+      age_seconds: direttaLastFetch ? Math.floor((Date.now() - direttaLastFetch) / 1000) : null,
+      matches_count: direttaCachedData?.total || 0
+    }
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server avanzato su http://localhost:${PORT}`);
-  console.log(`📊 Endpoints disponibili:`);
-  console.log(`   - GET / (homepage API info)`);
-  console.log(`   - GET /api/live-scores (tutte le partite)`);
-  console.log(`   - GET /api/live-scores/serie-a (solo Serie A)`);
-  console.log(`   - GET /api/live-scores/league/:league (filtra per campionato)`);
-  console.log(`   - GET /api/health (health check)`);
-  console.log(`   - GET /api/stats (statistiche cache)`);
+  console.log(`\n🚀 Pronostici Backend v2.0`);
+  console.log(`📡 Server running on http://localhost:${PORT}`);
+  console.log(`\n📊 Available Endpoints:`);
+  console.log(`\n   FLASHSCORE (Puppeteer):`);
+  console.log(`   ├─ GET /api/live-scores (all matches)`);
+  console.log(`   ├─ GET /api/live-scores/serie-a (Serie A only)`);
+  console.log(`   └─ GET /api/live-scores/league/:league (filter)`);
+  console.log(`\n   DIRETTA.IT (HTML Parser):`);
+  console.log(`   ├─ GET /api/diretta/live (all matches)`);
+  console.log(`   ├─ GET /api/diretta/league/:name (filter by league)`);
+  console.log(`   └─ GET /api/diretta/status/:status (live/finished/scheduled)`);
+  console.log(`\n   UTILITY:`);
+  console.log(`   ├─ GET /api/health (health check)`);
+  console.log(`   ├─ GET /api/stats (cache stats)`);
+  console.log(`   └─ GET / (API documentation)\n`);
 });
