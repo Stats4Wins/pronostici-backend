@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-01-03T14:35:00",
+  "total_matches": 21,
+  "matches": [
+    {
+      "league": "Serie A",
+      "country": "ITALIA",
+      "homeTeam": "Como",
+      "awayTeam": "Udinese",
+      "homeScore": "1",
+      "awayScore": "0",
+      "time": null,
+      "status": "finished"
+    },
+    {
+      "league": "Premier League",
+      "country": "INGHILTERRA",
+      "homeTeam": "Aston Villa",
+      "awayTeam": "Nottingham",
+      "homeScore": null,
+      "awayScore": null,
+      "time": null,
+      "status": "live"
+    },
+    {
+      "league": "LaLiga",
+      "country": "SPAGNA",
+      "homeTeam": "Celta Vigo",
+      "awayTeam": "Valencia",
+      "homeScore": null,
+      "awayScore": null,
+      "time": null,
+      "status": "live"
+    }
+  ]
+}
